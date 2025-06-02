@@ -10,6 +10,7 @@ A React Native client implementation for [Stream-Pi](https://stream-pi.com/), an
 - 🔌 WebSocket-based communication
 - 🎯 Type-safe implementation
 - 📊 Support for all Stream-Pi action types (Normal, Toggle, Folder, Gauge)
+- ⚡ Expo support
 
 ## Installation
 
@@ -19,9 +20,32 @@ npm install rn-stream-pi
 yarn add rn-stream-pi
 ```
 
-### Android Setup
+### Expo Setup
 
-Add the following to your `android/app/build.gradle`:
+1. Install the package:
+```bash
+expo install rn-stream-pi
+```
+
+2. Add the plugin to your `app.json` or `app.config.js`:
+```json
+{
+  "expo": {
+    "plugins": [
+      "rn-stream-pi"
+    ]
+  }
+}
+```
+
+3. Rebuild your app:
+```bash
+expo prebuild
+```
+
+### Manual Android Setup
+
+If you're not using Expo, add the following to your `android/app/build.gradle`:
 
 ```gradle
 dependencies {
@@ -115,6 +139,103 @@ interface StreamPiAction {
   gaugeMin?: number;
   gaugeMax?: number;
 }
+```
+
+## Storage System
+
+The package provides flexible storage options for actions and configurations:
+
+### Native Storage
+
+By default, the package uses native storage implementation:
+
+```typescript
+const client = new StreamPiClient({
+  serverUrl: 'ws://192.168.1.100:9999',
+  clientName: 'My RN Client',
+  version: '1.0.0'
+  // Uses native storage by default
+});
+```
+
+### Custom Storage
+
+You can implement your own storage system:
+
+```typescript
+const client = new StreamPiClient({
+  serverUrl: 'ws://192.168.1.100:9999',
+  clientName: 'My RN Client',
+  version: '1.0.0',
+  storage: {
+    type: 'custom',
+    getItem: async (key) => {
+      // Your custom get implementation
+      return localStorage.getItem(key);
+    },
+    setItem: async (key, value) => {
+      // Your custom set implementation
+      localStorage.setItem(key, value);
+    },
+    removeItem: async (key) => {
+      // Your custom remove implementation
+      localStorage.removeItem(key);
+    }
+  }
+});
+```
+
+### Schemas
+
+The package uses TypeScript interfaces to ensure type safety:
+
+#### Action Schema
+
+```typescript
+interface ActionSchema {
+  id: string;
+  type: 'normal' | 'toggle' | 'folder' | 'gauge';
+  displayText: string;
+  iconState?: string;
+  isToggled?: boolean;
+  isDisabled?: boolean;
+  gaugeValue?: number;
+  gaugeMin?: number;
+  gaugeMax?: number;
+  // Custom properties for user extensions
+  [key: string]: any;
+}
+```
+
+#### Config Schema
+
+```typescript
+interface ConfigSchema {
+  serverUrl: string;
+  clientName: string;
+  version: string;
+  storage?: {
+    type: 'native' | 'custom';
+    getItem?: (key: string) => Promise<string | null>;
+    setItem?: (key: string, value: string) => Promise<void>;
+    removeItem?: (key: string) => Promise<void>;
+  };
+  // Custom properties for user extensions
+  [key: string]: any;
+}
+```
+
+### Working with Stored Data
+
+```typescript
+// Get a stored action
+const action = await client.getStoredAction('action-id');
+
+// Get stored config
+const config = await client.getStoredConfig();
+
+// List all stored action IDs
+const actionIds = await client.listStoredActions();
 ```
 
 ## API Reference

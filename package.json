@@ -13,6 +13,7 @@
     "android",
     "ios",
     "cpp",
+    "expo-plugin",
     "*.podspec",
     "!lib/typescript/example",
     "!ios/build",
@@ -33,13 +34,16 @@
     "prepack": "bob build",
     "release": "release-it",
     "example": "yarn --cwd example",
-    "bootstrap": "yarn example && yarn install"
+    "bootstrap": "yarn example && yarn install",
+    "prepare": "bob build"
   },
   "keywords": [
     "react-native",
     "ios",
     "android",
-    "stream-pi"
+    "stream-pi",
+    "expo",
+    "expo-plugin"
   ],
   "repository": {
     "type": "git",
@@ -55,7 +59,8 @@
     "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
-    "events": "^3.3.0"
+    "events": "^3.3.0",
+    "@expo/config-plugins": "^7.0.0"
   },
   "devDependencies": {
     "@types/events": "^3.0.0",
@@ -74,10 +79,8 @@
     "release-it": "^15.0.0",
     "typescript": "^5.0.0"
   },
-  "resolutions": {
-    "@types/react": "^18.2.0"
-  },
   "peerDependencies": {
+    "expo": ">=47.0.0",
     "react": "*",
     "react-native": "*"
   },

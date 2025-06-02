@@ -1,56 +1,37 @@
-import { NativeModules, NativeEventEmitter } from 'react-native';
 import { EventEmitter } from 'events';
-
-const { StreamPi } = NativeModules;
-
-export interface StreamPiConfig {
-  serverHost: string;
-  serverPort: number;
-  clientName: string;
-  version: string;
-}
-
-export interface DisplayMetrics {
-  width: number;
-  height: number;
-  density: number;
-  scaledDensity: number;
-  xdpi: number;
-  ydpi: number;
-}
-
-export interface DeviceInfo {
-  platform: string;
-  model: string;
-  manufacturer: string;
-  version: string;
-  sdkVersion: string;
-}
-
-export interface WebSocketMessage {
-  type: string;
-  data: unknown;
-}
+import { StorageManager } from './storage/StorageManager';
+import { ActionSchema, ConfigSchema, StoredAction, StoredConfig, isActionSchema, isConfigSchema } from './types/schema';
 
 export class StreamPiClient extends EventEmitter {
+  private config: ConfigSchema;
+  private storage: StorageManager;
   private ws: WebSocket | null = null;
-  private config: StreamPiConfig;
-  private deviceInfo: DeviceInfo | null = null;
-  private displayMetrics: DisplayMetrics | null = null;
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 5;
+  private reconnectTimeout: NodeJS.Timeout | null = null;
 
-  constructor(config: StreamPiConfig) {
+  constructor(config: ConfigSchema) {
     super();
+    if (!isConfigSchema(config)) {
+      throw new Error('Invalid config schema');
+    }
     this.config = config;
+    this.storage = new StorageManager(config);
   }
 
   async initialize(): Promise<void> {
     try {
-      // Get device information
-      this.deviceInfo = await StreamPi.getDeviceInfo();
-      this.displayMetrics = await StreamPi.getDisplayMetrics();
-      
-      // Initialize WebSocket connection
+      // Load stored config if exists
+      const storedConfig = await this.storage.getConfig();
+      if (storedConfig) {
+        this.config = { ...this.config, ...storedConfig };
+      }
+
+      // Connect to WebSocket server
       await this.connect();
+
+      // Store current config
+      await this.storage.storeConfig(this.config);
     } catch (error) {
       console.error('Failed to initialize StreamPiClient:', error);
       throw error;
@@ -58,27 +39,34 @@ export class StreamPiClient extends EventEmitter {
   }
 
   private async connect(): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
+    if (this.ws) {
+      this.ws.close();
+    }
+
+    return new Promise((resolve, reject) => {
       try {
-        this.ws = new WebSocket(`ws://${this.config.serverHost}:${this.config.serverPort}`);
+        this.ws = new WebSocket(this.config.serverUrl);
 
         this.ws.onopen = () => {
+          this.reconnectAttempts = 0;
           this.emit('connected');
-          this.sendHandshake();
           resolve();
-        };
-
-        this.ws.onmessage = (event: MessageEvent) => {
-          this.handleMessage(event.data);
-        };
-
-        this.ws.onerror = (error: Event) => {
-          this.emit('error', error);
-          reject(error);
         };
 
         this.ws.onclose = () => {
           this.emit('disconnected');
+          this.handleReconnect();
+        };
+
+        this.ws.onerror = (error) => {
+          this.emit('error', error);
+          if (this.reconnectAttempts === 0) {
+            reject(error);
+          }
+        };
+
+        this.ws.onmessage = (event) => {
+          this.handleMessage(event.data);
         };
       } catch (error) {
         reject(error);
@@ -86,36 +74,34 @@ export class StreamPiClient extends EventEmitter {
     });
   }
 
-  private sendHandshake(): void {
-    const handshake: WebSocketMessage = {
-      type: 'handshake',
-      data: {
-        clientName: this.config.clientName,
-        version: this.config.version,
-        deviceInfo: this.deviceInfo,
-        displayMetrics: this.displayMetrics
-      }
-    };
-    this.sendMessage(handshake);
+  private handleReconnect(): void {
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      this.emit('error', new Error('Max reconnection attempts reached'));
+      return;
+    }
+
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+    }
+
+    this.reconnectTimeout = setTimeout(() => {
+      this.reconnectAttempts++;
+      this.connect().catch((error) => {
+        this.emit('error', error);
+      });
+    }, Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000));
   }
 
-  private handleMessage(data: string): void {
+  private async handleMessage(data: string): Promise<void> {
     try {
-      const message: WebSocketMessage = JSON.parse(data);
-      this.emit('message', message);
-
-      switch (message.type) {
-        case 'action':
-          this.emit('action', message.data);
-          break;
-        case 'profile':
-          this.emit('profile', message.data);
-          break;
-        case 'config':
-          this.emit('config', message.data);
-          break;
-        default:
-          console.warn('Unknown message type:', message.type);
+      const message = JSON.parse(data);
+      
+      if (message.type === 'action' && isActionSchema(message.data)) {
+        await this.storage.storeAction(message.data);
+        this.emit('action', message.data);
+      } else if (message.type === 'config' && isConfigSchema(message.data)) {
+        await this.storage.storeConfig(message.data);
+        this.emit('config', message.data);
       }
     } catch (error) {
       console.error('Failed to handle message:', error);
@@ -123,22 +109,33 @@ export class StreamPiClient extends EventEmitter {
     }
   }
 
-  public sendMessage(message: WebSocketMessage): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(message));
-    } else {
+  async sendMessage(message: any): Promise<void> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error('WebSocket is not connected');
     }
+    this.ws.send(JSON.stringify(message));
   }
 
-  public disconnect(): void {
+  async getStoredAction(actionId: string): Promise<StoredAction | null> {
+    return this.storage.getAction(actionId);
+  }
+
+  async getStoredConfig(): Promise<StoredConfig | null> {
+    return this.storage.getConfig();
+  }
+
+  async listStoredActions(): Promise<string[]> {
+    return this.storage.listStoredActions();
+  }
+
+  disconnect(): void {
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+    }
     if (this.ws) {
       this.ws.close();
       this.ws = null;
     }
   }
-
-  public async getStoragePath(): Promise<string> {
-    return await StreamPi.getStoragePath();
-  }
+} 
 } 
